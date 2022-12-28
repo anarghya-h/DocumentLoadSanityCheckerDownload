@@ -1,14 +1,13 @@
-﻿using DocumentLoadSanityCheckerDownload.Models;
+﻿using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
+using DocumentLoadSanityCheckerDownload.Models;
 using DocumentLoadSanityCheckerDownload.Models.Configs;
 using DocumentLoadSanityCheckerDownload.Services;
+using DocumentLoadSanityCheckerDownload.ViewModels;
 using Microsoft.AspNetCore.Mvc;
 using RestSharp;
 using RestSharp.Serializers.NewtonsoftJson;
-using DocumentFormat.OpenXml;
-using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Spreadsheet;
-using System.Security.Cryptography.Xml;
-using DocumentFormat.OpenXml.EMMA;
+using System;
 
 namespace DocumentLoadSanityCheckerDownload.Controllers
 {
@@ -20,7 +19,10 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
         AuthenticationService authService;
         BlobStorageService blobService;
         const string RevisionScheme = "RevLUBGlobal";
+        const string sheetName = "Picklist";
         Dictionary<string, int> PicklistColumns;
+        List<string> columnHeaders;
+        List<string> YesNoList;
         #endregion
         public SanityCheckerDownloadController(SDxConfig config, StorageAccountConfig config1, AuthenticationService service) 
         {
@@ -28,6 +30,28 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
             accountConfig = config1;
             authService = service;
             blobService = new BlobStorageService(accountConfig.ConnectionString, accountConfig.Container);
+            columnHeaders = new List<string>()
+            {
+                "revision code",
+                "originator company",
+                "document status code",
+                "language",
+                "discipline",
+                "document type short code",
+                "discipline document type short code",
+                "export control classification",
+                "storage media",
+                "site critical document",
+                "compliance record",
+                "security code",
+                "document owner",
+                "area code",
+                "area name",
+                "Floc Level 2",
+                "Floc Level 3",
+                "Floc Level 23-Merge"
+
+            };
             PicklistColumns = new Dictionary<string, int>()
             {
                 { "revisionCodeData", 1 },
@@ -38,70 +62,380 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                 { "exportControlClassData", 8 },
                 { "mediaData", 9 },
                 { "securityCodes", 12 },
-                { "Users", 13 }
+                { "Users", 13 },
+                { "areaCodes", 14 },
+                { "flocData", 16 }
+            };
+            YesNoList = new List<string>()
+            {
+                "yes",
+                "no"
             };
         }
         [HttpGet]
         public async Task<IActionResult> IndexAsync()
         {
-            PlantCodeData plantDetail = new()
+            PlantCodeInputOutput output = new()
             {
-                UID = "PL_HLP",
-                Name = "HLP"
+                code = await GetPlantsAsync()
             };
-            var data = await GetDataFromSDxAsync(plantDetail.UID);
-            UpdateDocSanityCheckerMacro(data, plantDetail);
-            return View();
+            return View(output);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDocSanityCheckerAsync(PlantCodeData plantDetail)
+        public IActionResult GetDocSanityChecker(PlantCodeInputOutput plantDetail)
         {
-            var data = await GetDataFromSDxAsync(plantDetail.UID);
-            UpdateDocSanityCheckerMacro(data, plantDetail);
+            var task = GetDataFromSDxAsync(plantDetail.plant.UID);
+            task.Wait();
+            var data = task.Result;
+            MemoryStream ms = UpdateDocSanityCheckerMacro(data, plantDetail.plant);
 
-            MemoryStream fileContent = blobService.DownloadFileFromBlob("ReportTemplate/LUB LATEST DOCUMENT LOAD SANITY CHECKER - " + plantDetail.Name + ".xlsm");
-            return File(fileContent.ToArray(), System.Net.Mime.MediaTypeNames.Application.Octet, "DOCUMENT LOAD SANITY CHECK.xlsm");
+            //MemoryStream fileContent = blobService.DownloadFileFromBlob("ReportTemplate/LUB LATEST DOCUMENT LOAD SANITY CHECKER - " + plantDetail.Name + ".xlsm");
+            if(ms != null)
+                return File(ms.ToArray(), System.Net.Mime.MediaTypeNames.Application.Octet, string.Concat("LUB LATEST DOCUMENT LOAD SANITY CHECKER - ", plantDetail.plant.UID.AsSpan(3), ".xlsm"));
+            return null;
         }
 
 
         #region Private methods
-        private void UpdateDocSanityCheckerMacro(SDxData data, PlantCodeData plantData)
+        private MemoryStream UpdateDocSanityCheckerMacro(SDxData data, PlantCodeData plantData)
         {
+            MemoryStream stream = null;
             char[] reference = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".ToCharArray();
+            SheetData sheetData = new();
+            Row row = new();
+            uint rowIndex = 2;
             try
             {
-                MemoryStream stream = blobService.DownloadFileFromBlob("ReportTemplate/LUB DOCUMENT LOAD SANITY CHECKER.xlsm");
+                foreach (var column in columnHeaders)
+                {
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(column),
+                        DataType = CellValues.String
+                    };
+                    row.AppendChild(cell);
+                }
+                sheetData.AppendChild(row);
+
+                //writing the revision code picklist
+                foreach (var code in data.revisionCodeData.MajorRevision)
+                {
+                    Row r = new();
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(code),
+                        CellReference = reference[PicklistColumns["revisionCodeData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the originator company picklist
+                rowIndex = 2;
+                foreach (var companyName in data.originatorCompanyData)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(companyName.Name),
+                        CellReference = reference[PicklistColumns["originatorCompanyData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+
+                }
+
+                //writing the document status code picklist
+                rowIndex = 2;
+                foreach (var docStatus in data.docStatusCodeData)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(docStatus.Name),
+                        CellReference = reference[PicklistColumns["docStatusCodeData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the language picklist
+                rowIndex = 2;
+                foreach (var language in data.languageData)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(language.Name),
+                        CellReference = reference[PicklistColumns["languageData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the discipline and doc type picklist
+                rowIndex = 2;
+                foreach (var discipline in data.disciplineData)
+                {
+                    foreach(var doctype in discipline.DisciplineDocumentClass)
+                    {
+                        Row r;
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            r = new();
+                        else
+                            r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                        Cell cell = new()
+                        {
+                            CellValue = new CellValue(discipline.Name),
+                            CellReference = reference[PicklistColumns["disciplineData"] - 1].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+                    
+                        cell = new()
+                        {
+                            CellValue = new CellValue(doctype.CFIHOSPrimKey),
+                            CellReference = reference[PicklistColumns["disciplineData"]].ToString() + rowIndex,
+                            DataType = CellValues.Number
+                        };
+                        r.AppendChild(cell);
+                    
+                        cell = new()
+                        {
+                            CellValue = new CellValue(discipline.Name + doctype.CFIHOSPrimKey),
+                            CellReference = reference[PicklistColumns["disciplineData"] + 1].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            sheetData.AppendChild(r);
+                        rowIndex++;
+                    }
+                }
+
+                //writing the export control class picklist
+                rowIndex = 2;
+                foreach (var exportclass in data.exportControlClassData)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(exportclass.Name),
+                        CellReference = reference[PicklistColumns["exportControlClassData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the storage media picklist
+                rowIndex = 2;
+                foreach (var media in data.mediaData)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1]; 
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(media.Name),
+                        CellReference = reference[PicklistColumns["mediaData"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the site critical and complaince record picklist
+                rowIndex = 2;
+                foreach(var entry in YesNoList)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(entry),
+                        CellReference = reference[PicklistColumns["mediaData"]].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                
+                    cell = new()
+                    {
+                        CellValue = new CellValue(entry),
+                        CellReference = reference[PicklistColumns["mediaData"] + 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    }; 
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the security code picklist
+                rowIndex = 2;
+                foreach (var code in data.securityCodes)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(code.Name),
+                        CellReference = reference[PicklistColumns["securityCodes"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the document user picklist
+                rowIndex = 2;
+                foreach (var user in data.Users)
+                {
+                    Row r;
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        r = new();
+                    else
+                        r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                    Cell cell = new()
+                    {
+                        CellValue = new CellValue(user.Email),
+                        CellReference = reference[PicklistColumns["Users"] - 1].ToString() + rowIndex,
+                        DataType = CellValues.String
+                    };
+                    r.AppendChild(cell);
+                    if (rowIndex > sheetData.ChildElements.Count)
+                        sheetData.AppendChild(r);
+                    rowIndex++;
+                }
+
+                //writing the area code picklist
+                rowIndex = 2;
+                if(data.areaCodes.Count != 0)
+                {
+                    foreach(var code in data.areaCodes)
+                    {
+                        Row r;
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            r = new();
+                        else
+                            r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                        Cell cell = new()
+                        {
+                            CellValue = new CellValue(code.Name),
+                            CellReference = reference[PicklistColumns["areaCodes"] - 1].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+
+                        cell = new()
+                        {
+                            CellValue = new CellValue(code.Description),
+                            CellReference = reference[PicklistColumns["areaCodes"]].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            sheetData.AppendChild(r);
+                        rowIndex++;
+                    }
+                }
+
+                //writing the floc picklist
+                rowIndex = 2;
+                foreach (var floc in data.flocData)
+                    {
+                        Row r;
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            r = new();
+                        else
+                            r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
+                        Cell cell = new()
+                        {
+                            CellValue = new CellValue(floc.FlocLevel2),
+                            CellReference = reference[PicklistColumns["flocData"] - 1].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+
+                        cell = new()
+                        {
+                            CellValue = new CellValue(floc.Name),
+                            CellReference = reference[PicklistColumns["flocData"]].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+
+                        cell = new()
+                        {
+                            CellValue = new CellValue(floc.FlocLevel2 + floc.Name),
+                            CellReference = reference[PicklistColumns["flocData"] + 1].ToString() + rowIndex,
+                            DataType = CellValues.String
+                        };
+                        r.AppendChild(cell);
+                        if (rowIndex > sheetData.ChildElements.Count)
+                            sheetData.AppendChild(r);
+                        rowIndex++;                
+                }
+
+                stream = blobService.DownloadFileFromBlob("ReportTemplate/LUB DOCUMENT LOAD SANITY CHECKER.xlsm");
                 using (SpreadsheetDocument spreadSheet = SpreadsheetDocument.Open(stream, true))
                 {
                     // Access the main Workbook part, which contains all references.
                     WorkbookPart workbookPart = spreadSheet.WorkbookPart;
 
                     // get sheet by name
-                    var sheet = workbookPart.Workbook.Descendants<Sheet>().FirstOrDefault(s => s.Name == "Picklist");
+                    var sheet = workbookPart.Workbook.Descendants<Sheet>().FirstOrDefault(s => s.Name == sheetName);
 
                     // get worksheetpart by sheet id
                     WorksheetPart worksheetpart = workbookPart.GetPartById(sheet.Id.Value) as WorksheetPart;
 
-                    uint rowIndex = 2;
-                    //writing the revision code picklist
-                    foreach(var code in data.revisionCodeData.MajorRevision)
-                    {
-                        Cell cell = GetCell(worksheetpart.Worksheet, reference[PicklistColumns["revisionCodeData"] - 1].ToString(), rowIndex);
-                        cell.CellValue = new CellValue(code);
-                        cell.DataType = CellValues.String;
-                        rowIndex++;
-                    }
-
-                    //writing the originator company picklist
-                    rowIndex = 2;
-                    foreach(var companyName in data.originatorCompanyData)
-                    {
-                        Cell cell = GetCell(worksheetpart.Worksheet, reference[PicklistColumns["originatorCompanyData"] - 1].ToString(), rowIndex);
-                        cell.CellValue = new CellValue(companyName.Name);
-                        cell.DataType = CellValues.String;
-                        rowIndex++;
-                    }
+                    // get worksheetpart by sheet id
+                    worksheetpart = workbookPart.GetPartById(sheet.Id.Value) as WorksheetPart;
+                    //Remove existing sheet data and replace with new data
+                    worksheetpart.Worksheet.RemoveAllChildren<SheetData>();
+                    worksheetpart.Worksheet.AddChild(sheetData);
 
                     // Save the worksheet.
                     worksheetpart.Worksheet.Save();
@@ -109,9 +443,6 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                     // for recacluation of formula
                     spreadSheet.WorkbookPart.Workbook.CalculationProperties.ForceFullCalculation = true;
                     spreadSheet.WorkbookPart.Workbook.CalculationProperties.FullCalculationOnLoad = true;
-
-                    //Uploading the file into the Storage account
-         
 
                 }
                 stream.Position = 0;
@@ -121,6 +452,8 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
             {
                 Console.WriteLine(e.Message);
             }
+            return stream;
+            
         }
 
         private static Cell GetCell(Worksheet worksheet, string columnName, uint rowIndex)

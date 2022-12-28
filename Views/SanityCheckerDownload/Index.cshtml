@@ -1,8 +1,45 @@
-﻿@{
+﻿@model DocumentLoadSanityCheckerDownload.ViewModels.PlantCodeInputOutput;
+@{
     ViewData["Title"] = "Home Page";
 }
 
-<div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://docs.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+<div class="row">
+    <div class="col-md-8">
+        <h3><b>Latest Document Load Sanity Checker Download</b></h3>
+    </div>
 </div>
+
+<br/>
+<div class="row">
+    <div class="col-md-8">
+        <form enctype="multipart/form-data" asp-action="GetDocSanityChecker" id="myform" name="myform">
+            <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+            <div class="mb-3">
+                <label class="form-label">Select Project</label>
+                <select class="form-select">
+                    <option value="">Lubricants</option> 
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" asp-for="plant.UID">Select Plant</label>
+                <select asp-for="plant.UID" class="form-select" aria-label="Default select example">
+                    <option value="">Select Plant</option>
+                    @foreach (var plantCode in Model.code)
+                    {
+                         <option value="@plantCode.UID">@plantCode.Name</option>
+                    }  
+                    
+                </select>
+                <span asp-validation-for="plant.UID" class="text-danger"></span><br />
+             </div>            
+            <div class="mb-3">
+                <br /><input type="submit" value="Download" id="submitbtn" class="btn btn-primary" />
+            </div>
+        </form>
+
+    </div>
+</div>
+
+@section Scripts{
+    @{await Html.RenderPartialAsync("_ValidationScriptsPartial");}
+}

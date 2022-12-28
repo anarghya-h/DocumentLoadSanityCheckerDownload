@@ -22,6 +22,7 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
         const string sheetName = "Picklist";
         Dictionary<string, int> PicklistColumns;
         List<string> columnHeaders;
+        List<string> columnHeadersGerman;
         List<string> YesNoList;
         #endregion
         public SanityCheckerDownloadController(SDxConfig config, StorageAccountConfig config1, AuthenticationService service) 
@@ -49,9 +50,31 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                 "area name",
                 "Floc Level 2",
                 "Floc Level 3",
-                "Floc Level 23-Merge"
+                "Floc Level 23"
 
             };
+            columnHeadersGerman = new List<string>()
+            {
+                "Revisionsnummer",
+                "Hersteller",
+                "Dokumentenstatus",
+                "Sprache",
+                "Disziplin",
+                "Dokumententyp",
+                "Disziplin Dokumententyp",
+                "Exportkontrolle",
+                "Speichermedium",
+                "Kritisches Dokument",
+                "Compliance Record",
+                "Sicherheitseinstufung",
+                "Dokumentenverantwortliche",
+                "Ablagenummer",
+                "area name - GLC",
+                "Floc Level 2",
+                "Floc Level 3",
+                "Floc Level 23"
+            };
+
             PicklistColumns = new Dictionary<string, int>()
             {
                 { "revisionCodeData", 1 },
@@ -107,15 +130,39 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
             uint rowIndex = 2;
             try
             {
-                foreach (var column in columnHeaders)
+                if(plantData.UID == "PL_GLC")
                 {
-                    Cell cell = new()
+                    foreach (var column in columnHeadersGerman)
                     {
-                        CellValue = new CellValue(column),
-                        DataType = CellValues.String
-                    };
-                    row.AppendChild(cell);
+                        Cell cell = new()
+                        {
+                            CellValue = new CellValue(column),
+                            DataType = CellValues.String
+                        };
+                        if (column == "Floc Level 2" || column == "Floc Level 3")
+                            cell.CellValue = new CellValue(string.Concat(column, " - ", plantData.UID.AsSpan(3)));
+                        if (column == "Floc Level 23")
+                            cell.CellValue = new CellValue(string.Concat(column, "-", plantData.UID.AsSpan(3), "-Merge"));
+                        row.AppendChild(cell);
+                    }
                 }
+                else
+                {
+                    foreach (var column in columnHeaders)
+                    {
+                        Cell cell = new()
+                        {
+                            CellValue = new CellValue(column),
+                            DataType = CellValues.String
+                        };
+                        if (column == "Floc Level 2" || column == "Floc Level 3" || column.Contains("area"))
+                            cell.CellValue = new CellValue(string.Concat(column, " - ", plantData.UID.AsSpan(3)));
+                        if (column == "Floc Level 23")
+                            cell.CellValue = new CellValue(string.Concat(column, "-", plantData.UID.AsSpan(3), "-Merge"));
+                        row.AppendChild(cell);
+                    }
+                }
+                
                 sheetData.AppendChild(row);
 
                 //writing the revision code picklist
@@ -340,7 +387,7 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                         r = (Row)sheetData.ChildElements[Convert.ToInt32(rowIndex) - 1];
                     Cell cell = new()
                     {
-                        CellValue = new CellValue(user.Email),
+                        CellValue = new CellValue(user.Email.ToLower()),
                         CellReference = reference[PicklistColumns["Users"] - 1].ToString() + rowIndex,
                         DataType = CellValues.String
                     };
@@ -418,8 +465,10 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                             sheetData.AppendChild(r);
                         rowIndex++;                
                 }
-
-                stream = blobService.DownloadFileFromBlob("ReportTemplate/LUB DOCUMENT LOAD SANITY CHECKER.xlsm");
+                if(plantData.UID == "PL_GLC")
+                    stream = blobService.DownloadFileFromBlob("ReportTemplate/LUB DOCUMENT LOAD SANITY CHECKER GERMAN.xlsm");
+                else
+                    stream = blobService.DownloadFileFromBlob("ReportTemplate/LUB DOCUMENT LOAD SANITY CHECKER.xlsm");
                 using (SpreadsheetDocument spreadSheet = SpreadsheetDocument.Open(stream, true))
                 {
                     // Access the main Workbook part, which contains all references.
@@ -576,7 +625,7 @@ namespace DocumentLoadSanityCheckerDownload.Controllers
                 request.AddHeader("SPFConfigUID", PlantUID);
 
                 //fetching the details for Revision code
-                string odataUrl = sDxConfig.ServerBaseUri + $"RevisionSchemes?$filter=Name eq 'RevLUBGlobal'&$select=Name,Major_Seq,Minor_Seq&$count=true";
+                string odataUrl = sDxConfig.ServerBaseUri + $"RevisionSchemes?$filter=Name eq '{RevisionScheme}'&$select=Name,Major_Seq,Minor_Seq&$count=true";
                 RestClient client = new RestClient(odataUrl).UseNewtonsoftJson();
                 var RevisionCodeDataTask = client.GetAsync<OdataQueryResponse<RevisionCodeData>>(request);
                 //response.Value[0].MajorRevision = response.Value[0].Major_Seq.Split(',').ToList();
